@@ -1,24 +1,60 @@
 #include "PacketHeader.h"
 #include "crc32.h"
 
+#include <vector>
+#include <string>
+#include <iostream>
+#include <fstream>
+#include <stdexcept>
+#include <cstring>
+#include <cstdlib>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <fcntl.h>
+
+// UDP Header, 8 Bytes; IP Protocol Header, 20 Bytes; PacketHeader, 16 bytes
+// 1500 - (8 + 20 + 16) = 1456 for file data chunks
+#define MAX_SEND_DATA 1472
+#define FILE_CHUNK_SIZE 1456
+
+using std::string;
+using std::vector;
+
+void check_error(int input)
+{
+    if (input < 0)
+        throw std::runtime_error("ERROR on result");
+}
+
 class wSender
 {
+public:
+    wSender(char *argv[]);
+
+private:
     // Steps:
     // 1. Read in input file
+    // 1a) Split file into appropriate chunks
+    vector<string> split_file_chunks(const string &file_in);
     // 2. Setup and send packets USING UDP !
-    // 2a) Split file into appropriate chunks
-    // 2b) Append a checksum (presumably the whole header?) to the packet
+    void send_start(int recv_sock, sockaddr_in &recv_addr,
+                    PacketHeader &header, std::ofstream &outfile);
+    // 2a) Append a checksum (presumably the whole header?) to the packet
     //      Use crc32.h function
-    // 2c) *Only send through packets based on size of sliding window
-    // 2d) Handle the following cases:
+    // 2b) *Only send through packets based on size of sliding window
+    // 2c) Handle the following cases:
     //      Loss of arbitrary levels;
     //      Re­ordering of ACK messages;
     //      Duplication of any amount for any packet;
     //      Delay in the arrivals of ACKs.
 
     //      *Retransmission timer: 500 ms
-    // 2e) Receive and track the ACKs that we get and retransmit accordingly
+    // 2d) Receive and track the ACKs that we get and retransmit accordingly
     //      Retransmit ALL of the window if packet M + 1 ACK has not been recvd
-    // 2f) LOGGING
+    // 2e) LOGGING
     // 3) Send an END message
 };
