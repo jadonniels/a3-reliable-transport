@@ -8,15 +8,16 @@ void wSender::split_file_chunks(deque<string> &chunks,
 {
     std::ifstream instream(file_in);
 
-    char file_chunk[FILE_CHUNK_SIZE];
-    while (!instream.eof())
+    //error check to make sure file was properly opened
+    if (!instream.is_open())
     {
-        instream.read(file_chunk, FILE_CHUNK_SIZE);
+        throw std::runtime_error("Failed to open file: " + file_in);
+    }
 
-        // # bytes actually read
-        std::streamsize bytes_read = instream.gcount();
-        if (bytes_read > 0)
-            chunks.push_back(string(file_chunk, bytes_read));
+    char file_chunk[FILE_CHUNK_SIZE];
+    while (instream.read(file_chunk, FILE_CHUNK_SIZE) || instream.gcount() > 0)
+    {
+        chunks.push_back(string(file_chunk, instream.gcount()));
     }
 
     instream.close();
@@ -31,22 +32,26 @@ void wSender::send_start(int sockfd,
                          PacketHeader &header,
                          std::ofstream &outfile)
 {
+    //start buffer is just the size of the header
     char start_buf[sizeof(PacketHeader)];
     memcpy(start_buf, &header, sizeof(header));
 
     // Send START and log
-    sendto(sockfd, start_buf, sizeof(start_buf),
-           0, (struct sockaddr *)&recv_addr, sizeof(recv_addr));
+    ssize_t sent_bytes = sendto(sockfd, start_buf, sizeof(start_buf),
+           0, (struct sockaddr *)&recv_addr, sizeof(PacketHeader));
+    
+    check_error(sent_bytes);
 
     outfile << header.type << header.seqNum
             << header.length << header.checksum << std::endl;
 
     // Receive ACK, write to PacketHeader object and log
     char recv_buf[sizeof(PacketHeader)];
-    recvfrom(sockfd, recv_buf, sizeof(recv_buf), 0, NULL, NULL);
+    ssize_t received_bytes = recvfrom(sockfd, recv_buf, sizeof(recv_buf), 0, NULL, NULL);
+    check_error(received_bytes);
 
     PacketHeader recv_header;
-    memcpy(&recv_header, &recv_buf, sizeof(recv_header));
+    memcpy(&recv_header, &recv_buf, sizeof(PacketHeader));
 
     outfile << recv_header.type << recv_header.seqNum
             << recv_header.length << recv_header.checksum << std::endl;
@@ -63,31 +68,30 @@ void wSender::send_window(deque<string> &chunks,
                           std::ofstream &outfile)
 {
     char send_packet[MAX_SEND_DATA];
-    uint32_t i = 0;
     uint32_t sent_packets = 0;
     while (sent_packets < outstanding_limit &&
            sent_packets < chunks.size())
     {
         // type & seqNum were previously set correctly
-        header.length = chunks[i].size();
-        header.checksum = crc32(chunks[i].c_str(), chunks[i].size());
+        header.length = chunks[sent_packets].size();
+        header.checksum = crc32(chunks[sent_packets].c_str(), chunks[sent_packets].size());
 
         // First copy header into the first 16 bytes
         memcpy(send_packet, &header, sizeof(header));
         // Then copy data into the next bytes according to size
-        memcpy(send_packet + sizeof(header), chunks[i].c_str(), chunks[i].size());
+        memcpy(send_packet + sizeof(header), chunks[sent_packets].c_str(), chunks[sent_packets].size());
 
         // <= 1472
-        size_t packet_size = sizeof(header) + chunks[i].size();
-        sendto(sockfd, send_packet, packet_size,
+        size_t packet_size = sizeof(header) + chunks[sent_packets].size();
+        ssize_t bytes_sent = sendto(sockfd, send_packet, packet_size,
                0, (struct sockaddr *)&recv_addr, sizeof(recv_addr));
+        check_error(bytes_sent);
 
         outfile << header.type << header.seqNum
                 << header.length << header.checksum << std::endl;
 
         ++sent_packets;
         ++header.seqNum;
-        ++i;
     }
 }
 
@@ -184,12 +188,13 @@ wSender::wSender(char *argv[])
     recv_addr.sin_port = htons(std::stoi(argv[2]));
     recv_addr.sin_addr.s_addr = inet_addr(argv[1]);
 
-    // Create chunks deque
+    // Create chunks deque  FIXME: feel like it could be a queue
     deque<string> chunks;
     split_file_chunks(chunks, string(argv[4]));
 
     // Send start and begin stream
     std::ofstream sender_log(argv[5]);
+    //FIXME: I think even the first packet should have a crc checksum
     PacketHeader header{0, 0, 0, 0};
     send_start(sockfd, recv_addr, header, sender_log);
 

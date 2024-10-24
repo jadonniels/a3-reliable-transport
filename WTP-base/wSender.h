@@ -33,8 +33,9 @@ using std::vector;
 
 void check_error(int input)
 {
-    if (input < 0)
-        throw std::runtime_error("ERROR on result");
+    if (input < 0){
+        throw std::runtime_error(std::strerror(errno));
+    }
 }
 
 class wSender
