@@ -44,6 +44,8 @@
     "tuple": "cpp",
     "typeinfo": "cpp",
     "variant": "cpp",
-    "algorithm": "cpp"
+    "algorithm": "cpp",
+    "unordered_set": "cpp",
+    "deque": "cpp"
   }
 }
