@@ -2,7 +2,7 @@
 
 // REQUIRES: None
 // MODIFIES: chunks
-// EFFECTS: Split file into FILE_CHUNK_SIZE chunks and append to chunks vector
+// EFFECTS: Split file into FILE_CHUNK_SIZE chunks and append to chunks deque
 void wSender::split_file_chunks(deque<string> &chunks,
                                 const string &file_in)
 {
@@ -12,6 +12,7 @@ void wSender::split_file_chunks(deque<string> &chunks,
     while (!instream.eof())
     {
         instream.read(file_chunk, FILE_CHUNK_SIZE);
+
         // # bytes actually read
         std::streamsize bytes_read = instream.gcount();
         if (bytes_read > 0)
@@ -21,6 +22,7 @@ void wSender::split_file_chunks(deque<string> &chunks,
     instream.close();
 }
 
+// FIXME - Consider that START and END may not be received - must confirm?
 // REQUIRES: None
 // MODIFIES: None
 // EFFECTS: Calculate checksum for and send START message
@@ -30,28 +32,29 @@ void wSender::send_start(int sockfd,
                          std::ofstream &outfile)
 {
     char start_buf[sizeof(PacketHeader)];
-    char recv_buf[sizeof(PacketHeader)];
-
     memcpy(start_buf, &header, sizeof(header));
-    // The checksum uses rest of the message besides itself to avoid a circular dependency
-    header.checksum = crc32(start_buf, sizeof(header));
 
-    // Send START
+    // Send START and log
     sendto(sockfd, start_buf, sizeof(start_buf),
            0, (struct sockaddr *)&recv_addr, sizeof(recv_addr));
-    outfile << header.type << header.seqNum << header.length << header.checksum << std::endl;
+
+    outfile << header.type << header.seqNum
+            << header.length << header.checksum << std::endl;
 
     // Receive ACK, write to PacketHeader object and log
+    char recv_buf[sizeof(PacketHeader)];
     recvfrom(sockfd, recv_buf, sizeof(recv_buf), 0, NULL, NULL);
+
     PacketHeader recv_header;
     memcpy(&recv_header, &recv_buf, sizeof(recv_header));
+
     outfile << recv_header.type << recv_header.seqNum
             << recv_header.length << recv_header.checksum << std::endl;
 }
 
 // REQUIRES: chunks.size() > 0
-// MODIFIES: outstanding_packets
-// EFFECTS: Create map of seqNums to PacketHeaders and send these packets with their data chunks
+// MODIFIES: header, outfile
+// EFFECTS: Copy data into char buffers and send min(chunks.size(), outstanding_limit) packets
 void wSender::send_window(deque<string> &chunks,
                           PacketHeader &header,
                           size_t outstanding_limit,
@@ -65,7 +68,9 @@ void wSender::send_window(deque<string> &chunks,
     while (sent_packets < outstanding_limit &&
            sent_packets < chunks.size())
     {
+        // type & seqNum were previously set correctly
         header.length = chunks[i].size();
+        header.checksum = crc32(chunks[i].c_str(), chunks[i].size());
 
         // First copy header into the first 16 bytes
         memcpy(send_packet, &header, sizeof(header));
@@ -74,14 +79,11 @@ void wSender::send_window(deque<string> &chunks,
 
         // <= 1472
         size_t packet_size = sizeof(header) + chunks[i].size();
-        header.checksum = crc32(send_packet, packet_size);
-
-        // Copy updated header with checksum back into send_packet
-        memcpy(send_packet, &header, sizeof(header));
-
         sendto(sockfd, send_packet, packet_size,
                0, (struct sockaddr *)&recv_addr, sizeof(recv_addr));
-        outfile << header.type << header.seqNum << header.length << header.checksum << std::endl;
+
+        outfile << header.type << header.seqNum
+                << header.length << header.checksum << std::endl;
 
         ++sent_packets;
         ++header.seqNum;
@@ -90,12 +92,13 @@ void wSender::send_window(deque<string> &chunks,
 }
 
 // REQUIRES: chunks.size() > 0
-// MODIFIES: chunks
-// EFFECTS: Create map of seqNums to PacketHeaders and send these packets with their data chunks
+// MODIFIES: chunks, header, cur_seq_num
+// EFFECTS: Call recvfrom() min(chunks.size(), outstanding_limit) times, shifting window if poss
+//          Places received-packet seqNum into a set to evaluate which need resent. Resets seqNum.
 void wSender::try_receive(deque<string> &chunks,
                           PacketHeader &header,
                           size_t outstanding_limit,
-                          uint32_t &init_seq_num,
+                          uint32_t &cur_seq_num,
                           int sockfd,
                           std::ofstream &outfile)
 {
@@ -106,6 +109,7 @@ void wSender::try_receive(deque<string> &chunks,
     {
         ssize_t bytes_received = recvfrom(
             sockfd, recv_packet, sizeof(PacketHeader), 0, NULL, NULL);
+
         if (bytes_received == -1)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -117,44 +121,44 @@ void wSender::try_receive(deque<string> &chunks,
         // Decode the received bytes into a PacketHeader object
         PacketHeader received_header;
         memcpy(&received_header, recv_packet, sizeof(PacketHeader));
+
         outfile << received_header.type << received_header.seqNum
                 << received_header.length << received_header.checksum << std::endl;
 
-        // Insert the PacketHeader into the unordered_set
+        // Insert the seqNum into the unordered_set
         received_seq.insert(received_header.seqNum);
     }
 
     // Process received_seq set and move window accordingly
-    while (received_seq.find(init_seq_num) != received_seq.end())
+    while (received_seq.find(cur_seq_num) != received_seq.end())
     {
-        ++init_seq_num;
+        ++cur_seq_num;
         chunks.pop_front();
     }
 
     // It's possible that this doesn't get changed at all
-    header.seqNum = init_seq_num;
+    header.seqNum = cur_seq_num;
 }
 
 void wSender::send_end(int sockfd,
                        sockaddr_in &recv_addr,
                        PacketHeader &header,
-                       uint32_t init_seq_num,
+                       uint32_t cur_seq_num,
                        std::ofstream &outfile)
 {
     char end_buf[sizeof(PacketHeader)];
     header.type = 1;
-    header.seqNum = init_seq_num;
+    header.seqNum = cur_seq_num;
     header.length = 0;
     header.checksum = 0;
 
-    // Copy pre-CRC PacketHeader into end_buf
+    // Copy PacketHeader into end_buf
     memcpy(end_buf, &header, sizeof(header));
-    // The checksum uses rest of the message besides itself to avoid a circular dependency
-    header.checksum = crc32(end_buf, sizeof(header));
 
-    // Send END and record
+    // Send END and log
     sendto(sockfd, end_buf, sizeof(end_buf),
            0, (struct sockaddr *)&recv_addr, sizeof(recv_addr));
+
     outfile << header.type << header.seqNum << header.length << header.checksum << std::endl;
 }
 
@@ -190,22 +194,19 @@ wSender::wSender(char *argv[])
     send_start(sockfd, recv_addr, header, sender_log);
 
     header.type = 2;   // DATA for all of next stage
-    header.seqNum = 1; // Begin this sequence at 1
-    uint32_t init_seq_num = 1;
+    header.seqNum = 1; // Begin the sequence at 1
+    uint32_t cur_seq_num = 1;
 
     uint32_t outstanding_limit = std::stoul(argv[3]);
     while (!chunks.empty())
     {
-        // seqNum : PacketData
-        unordered_map<uint32_t, PacketHeader> outstanding_packets;
-
         send_window(chunks, header, outstanding_limit,
                     sockfd, recv_addr, sender_log);
         try_receive(chunks, header, outstanding_limit,
-                    init_seq_num, sockfd, sender_log);
+                    cur_seq_num, sockfd, sender_log);
     }
 
-    send_end(sockfd, recv_addr, header, init_seq_num, sender_log);
+    send_end(sockfd, recv_addr, header, cur_seq_num, sender_log);
     close(sockfd);
 }
 

@@ -2,6 +2,7 @@
 
 class wReceiver
 {
+    wReceiver::wReceiver();
     // Steps:
     // 1. Receive and store the file from wSender from ONE connection
     // 1a) Ignore any additional START in the middle of the connection

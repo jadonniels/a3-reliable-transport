@@ -6,7 +6,6 @@
 #include <vector>
 #include <string>
 #include <unordered_set>
-#include <unordered_map>
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -29,7 +28,6 @@
 
 using std::deque;
 using std::string;
-using std::unordered_map;
 using std::unordered_set;
 using std::vector;
 
@@ -70,15 +68,16 @@ private:
     void try_receive(deque<string> &chunks,
                      PacketHeader &header,
                      size_t outstanding_limit,
-                     uint32_t &init_seq_num,
+                     uint32_t &cur_seq_num,
                      int sockfd,
                      std::ofstream &outfile);
 
-    // 4. LOGGING
-    // 5. Send an END message
+    // 4. Send an END message
     void send_end(int sockfd,
                   sockaddr_in &recv_addr,
                   PacketHeader &header,
-                  uint32_t init_seq_num,
+                  uint32_t cur_seq_num,
                   std::ofstream &outfile);
+
+    // 5. LOGGING
 };

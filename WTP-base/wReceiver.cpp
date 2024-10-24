@@ -1,11 +1,15 @@
 #include "wReceiver.h"
 
-int main()
+wReceiver::wReceiver()
+{
+}
+
+int main(int argc, char *argv[])
 {
     int sockfd;
     char buffer[1024];
     struct sockaddr_in server_addr, client_addr;
-    socklen_t addr_len;
+    socklen_t addr_len = sizeof(client_addr);
     int n;
 
     // Create socket
@@ -17,11 +21,9 @@ int main()
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(8888);
-
     check_error(bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0);
 
-    addr_len = sizeof(client_addr);
-
+    // NOW WE START TO RECEIVE AND SHIT
     // Receive data
     n = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &addr_len);
     buffer[n] = '\0';
